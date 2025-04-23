@@ -1,6 +1,6 @@
 import math
 import time
-
+import os
 import numpy
 import ray
 import torch
@@ -182,7 +182,9 @@ class SelfPlay:
                 game_history.to_play_history.append(self.game.to_play())
         if render:
           try:
-            gif_path = f"pacman_{int(time.time())}.gif"
+            gif_dir = "game_play_gif"
+            os.makedirs(gif_dir, exist_ok=True)
+            gif_path = os.path.join(gif_dir, f"pacman_{int(time.time())}.gif")
             imageio.mimsave(gif_path, self.game.frames, fps=10)
             display(Image(gif_path))
           except Exception as e:
