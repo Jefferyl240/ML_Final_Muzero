@@ -2,6 +2,8 @@ import datetime
 import pathlib
 
 import gym
+from gym.wrappers import AtariPreprocessing
+from gym.wrappers import FrameStack
 import numpy
 import torch
 
@@ -16,18 +18,21 @@ except ModuleNotFoundError:
 
 
 class MuZeroConfig:
-    def __init__(self):
+    def __init__(self, game_name="BreakoutNoFrameskip-v4"):
         # fmt: off
         # More information is available here: https://github.com/werner-duvaud/muzero-general/wiki/Hyperparameter-Optimization
-
+        self.game_name = game_name
+        dummy_env = gym.make(game_name)
+        self.action_space = list(range(dummy_env.action_space.n))
+        dummy_env.close()
+        
         self.seed = 0  # Seed for numpy, torch and the game
-        self.max_num_gpus = None  # Fix the maximum number of GPUs to use. It's usually faster to use a single GPU (set it to 1) if it has enough memory. None will use every GPUs available
+        self.max_num_gpus = 1  # Fix the maximum number of GPUs to use. It's usually faster to use a single GPU (set it to 1) if it has enough memory. None will use every GPUs available
 
 
 
         ### Game
         self.observation_shape = (3, 96, 96)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
-        self.action_space = list(range(9))  # Fixed list of all possible actions. You should only edit the length
         self.players = list(range(1))  # List of players. You should only edit the length
         self.stacked_observations = 32  # Number of previous observations and previous actions to add to the current observation
 
@@ -38,7 +43,7 @@ class MuZeroConfig:
 
 
         ### Self-Play
-        self.num_workers = 350  # Number of simultaneous threads/workers self-playing to feed the replay buffer
+        self.num_workers = 1  # Number of simultaneous threads/workers self-playing to feed the replay buffer
         self.selfplay_on_gpu = False
         self.max_moves = 27000  # Maximum number of moves if game is not finished before
         self.num_simulations = 50  # Number of future moves self-simulated
@@ -81,7 +86,7 @@ class MuZeroConfig:
         ### Training
         self.results_path = pathlib.Path(__file__).resolve().parents[1] / "results" / pathlib.Path(__file__).stem / datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S")  # Path to store the model weights and TensorBoard logs
         self.save_model = True  # Save the checkpoint in results_path as model.checkpoint
-        self.training_steps = int(1000e3)  # Total number of training steps (ie weights update according to a batch)
+        self.training_steps = int(500e3)  # Total number of training steps (ie weights update according to a batch)
         self.batch_size = 1024  # Number of parts of games to train on at each training step
         self.checkpoint_interval = int(1e3)  # Number of training steps before using the model for self-playing
         self.value_loss_weight = 0.25  # Scale the value loss to avoid overfitting of the value function, paper recommends 0.25 (See paper appendix Reanalyze)
@@ -92,7 +97,7 @@ class MuZeroConfig:
         self.momentum = 0.9  # Used only if optimizer is SGD
 
         # Exponential learning rate schedule
-        self.lr_init = 0.05  # Initial learning rate
+        self.lr_init = 0.1  # Initial learning rate
         self.lr_decay_rate = 0.1  # Set it to 1 to use a constant learning rate
         self.lr_decay_steps = 350e3
 
@@ -138,11 +143,15 @@ class Game(AbstractGame):
     Game wrapper.
     """
 
-    def __init__(self, seed=None):
-        self.env = gym.make("ALE/MsPacman-v5", render_mode="rgb_array")
+    def __init__(self, game_name="BreakoutNoFrameskip-v4",seed=None):
+        base_env = gym.make(game_name, render_mode="rgb_array")
+        env = AtariPreprocessing(base_env, frame_skip=4, scale_obs=False)
+        env = FrameStack(env, num_stack=1)
         if seed is not None:
-            self.env.seed(seed)
+            env.reset(seed=seed)
+        self.env = env
         self.frames = []
+        self.action_space = list(range(env.action_space.n))
 
     def step(self, action):
         """
@@ -154,12 +163,10 @@ class Game(AbstractGame):
         Returns:
             The new observation, the reward and a boolean if the game has ended.
         """
-        observation, reward, terminated, truncated, _ = self.env.step(action)
+        obs, reward, terminated, truncated, _ = self.env.step(action)
         done = terminated or truncated
-        observation = cv2.resize(observation, (96, 96), interpolation=cv2.INTER_AREA)
-        observation = numpy.asarray(observation, dtype="float32") / 255.0
-        observation = numpy.moveaxis(observation, -1, 0)
-        return observation, reward, done
+        obs = self._preprocess(obs)
+        return obs, reward, done
 
     def legal_actions(self):
         """
@@ -172,7 +179,7 @@ class Game(AbstractGame):
         Returns:
             An array of integers, subset of the action space.
         """
-        return list(range(self.env.action_space.n))
+        return self.action_space
 
     def reset(self):
         """
@@ -181,11 +188,15 @@ class Game(AbstractGame):
         Returns:
             Initial observation of the game.
         """
-        observation, _ = self.env.reset()
-        observation = cv2.resize(observation, (96, 96), interpolation=cv2.INTER_AREA)
-        observation = numpy.asarray(observation, dtype="float32") / 255.0
-        observation = numpy.moveaxis(observation, -1, 0)
-        return observation
+        obs, _ = self.env.reset()
+        return self._preprocess(obs)
+
+    def _preprocess(self, obs):
+        obs = cv2.resize(obs, (96, 96), interpolation=cv2.INTER_AREA)
+        obs = numpy.asarray(obs, dtype=numpy.float32) / 255.0
+        if obs.shape[-1] == 1:
+            obs = numpy.repeat(obs, 3, axis=-1)
+        return numpy.moveaxis(obs, -1, 0)
 
     def close(self):
         """

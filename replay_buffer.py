@@ -4,7 +4,8 @@ import time
 import numpy
 import ray
 import torch
-
+from collections import OrderedDict
+from collections import defaultdict
 import models
 
 
@@ -16,7 +17,7 @@ class ReplayBuffer:
 
     def __init__(self, initial_checkpoint, initial_buffer, config):
         self.config = config
-        self.buffer = copy.deepcopy(initial_buffer)
+        self.buffer = OrderedDict(initial_buffer)
         self.num_played_games = initial_checkpoint["num_played_games"]
         self.num_played_steps = initial_checkpoint["num_played_steps"]
         self.total_samples = sum(
@@ -55,10 +56,10 @@ class ReplayBuffer:
         self.num_played_steps += len(game_history.root_values)
         self.total_samples += len(game_history.root_values)
 
-        if self.config.replay_buffer_size < len(self.buffer):
-            del_id = self.num_played_games - len(self.buffer)
-            self.total_samples -= len(self.buffer[del_id].root_values)
-            del self.buffer[del_id]
+        if len(self.buffer) > self.config.replay_buffer_size:
+            del_id, old_game = self.buffer.popitem(last=False)
+            self.total_samples -= len(old_game.root_values)
+
 
         if shared_storage:
             shared_storage.set_info.remote("num_played_games", self.num_played_games)
@@ -207,13 +208,12 @@ class ReplayBuffer:
         Update game and position priorities with priorities calculated during the training.
         See Distributed Prioritized Experience Replay https://arxiv.org/abs/1803.00933
         """
-        for i in range(len(index_info)):
-            game_id, game_pos = index_info[i]
-
+        updates = defaultdict(list)
+        for (game_id, game_pos), priority in zip(index_info, priorities):
+            updates[game_id].append((game_pos, priority))
             # The element could have been removed since its selection and training
             if next(iter(self.buffer)) <= game_id:
                 # Update position priorities
-                priority = priorities[i, :]
                 start_index = game_pos
                 end_index = min(
                     game_pos + len(priority), len(self.buffer[game_id].priorities)
@@ -358,10 +358,12 @@ class Reanalyse:
                     .float()
                     .to(next(self.model.parameters()).device)
                 )
-                values = models.support_to_scalar(
-                    self.model.initial_inference(observations)[0],
-                    self.config.support_size,
-                )
+                with torch.no_grad():
+                    obs_tensor = torch.tensor(observations).float().to(next(self.model.parameters()).device)
+                    with torch.cuda.amp.autocast(enabled=self.config.reanalyse_on_gpu):
+                        values = self.model.initial_inference(obs_tensor)[0]
+                    values = models.support_to_scalar(values, self.config.support_size)
+
                 game_history.reanalysed_predicted_root_values = (
                     torch.squeeze(values).detach().cpu().numpy()
                 )

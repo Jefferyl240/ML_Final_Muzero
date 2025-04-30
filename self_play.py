@@ -293,12 +293,13 @@ class MCTS:
                 .unsqueeze(0)
                 .to(next(model.parameters()).device)
             )
-            (
-                root_predicted_value,
-                reward,
-                policy_logits,
-                hidden_state,
-            ) = model.initial_inference(observation)
+            with torch.cuda.amp.autocast(enabled=self.config.selfplay_on_gpu):
+                (
+                    root_predicted_value,
+                    reward,
+                    policy_logits,
+                    hidden_state,
+                ) = model.initial_inference(observation)
             root_predicted_value = models.support_to_scalar(
                 root_predicted_value, self.config.support_size
             ).item()
@@ -346,10 +347,11 @@ class MCTS:
             # Inside the search tree we use the dynamics function to obtain the next hidden
             # state given an action and the previous hidden state
             parent = search_path[-2]
-            value, reward, policy_logits, hidden_state = model.recurrent_inference(
-                parent.hidden_state,
-                torch.tensor([[action]]).to(parent.hidden_state.device),
-            )
+            with torch.cuda.amp.autocast(enabled=self.config.selfplay_on_gpu):
+                value, reward, policy_logits, hidden_state = model.recurrent_inference(
+                    parent.hidden_state,
+                    torch.tensor([[action]]).to(parent.hidden_state.device),
+                )
             value = models.support_to_scalar(value, self.config.support_size).item()
             reward = models.support_to_scalar(reward, self.config.support_size).item()
             node.expand(

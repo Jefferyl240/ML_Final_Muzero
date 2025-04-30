@@ -95,7 +95,7 @@ class MuZeroFullyConnectedNetwork(AbstractNetwork):
         self.action_space_size = action_space_size
         self.full_support_size = 2 * support_size + 1
 
-        self.representation_network = torch.nn.DataParallel(
+        self.representation_network = RepresentationNetwork(
             mlp(
                 observation_shape[0]
                 * observation_shape[1]
