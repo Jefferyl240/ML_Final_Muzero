@@ -17,7 +17,7 @@ class SelfPlay:
 
     def __init__(self, initial_checkpoint, Game, config, seed):
         self.config = config
-        self.game = Game(seed)
+        self.game = Game(self.config.game_name, seed)
 
         # Fix random generator seed
         numpy.random.seed(seed)

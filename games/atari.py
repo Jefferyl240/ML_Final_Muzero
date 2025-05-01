@@ -32,9 +32,9 @@ class MuZeroConfig:
 
 
         ### Game
-        self.observation_shape = (3, 96, 96)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
+        self.observation_shape = (32, 96, 96)  # 32 stacked frames, each 96x96
         self.players = list(range(1))  # List of players. You should only edit the length
-        self.stacked_observations = 32  # Number of previous observations and previous actions to add to the current observation
+        self.stacked_observations = 1  # We're already stacking in the environment wrapper
 
         # Evaluate
         self.muzero_player = 0  # Turn Muzero begins to play (0: MuZero plays first, 1: MuZero plays second)
@@ -146,7 +146,7 @@ class Game(AbstractGame):
     def __init__(self, game_name="BreakoutNoFrameskip-v4",seed=None):
         base_env = gym.make(game_name, render_mode="rgb_array")
         env = AtariPreprocessing(base_env, frame_skip=4, scale_obs=False)
-        env = FrameStack(env, num_stack=1)
+        env = FrameStack(env, num_stack=32)  # Stack 32 frames
         if seed is not None:
             env.reset(seed=seed)
         self.env = env
@@ -192,11 +192,20 @@ class Game(AbstractGame):
         return self._preprocess(obs)
 
     def _preprocess(self, obs):
-        obs = cv2.resize(obs, (96, 96), interpolation=cv2.INTER_AREA)
-        obs = numpy.asarray(obs, dtype=numpy.float32) / 255.0
-        if obs.shape[-1] == 1:
-            obs = numpy.repeat(obs, 3, axis=-1)
-        return numpy.moveaxis(obs, -1, 0)
+        # Ensure obs is a numpy array
+        obs = numpy.asarray(obs)
+        # Convert to uint8 if not already
+        if obs.dtype != numpy.uint8:
+            obs = (obs * 255).astype(numpy.uint8)
+        # Resize each frame in the stack
+        processed_frames = []
+        for frame in obs:
+            frame = cv2.resize(frame, (96, 96), interpolation=cv2.INTER_AREA)
+            frame = frame.astype(numpy.float32) / 255.0
+            processed_frames.append(frame)
+        # Stack the processed frames
+        obs = numpy.stack(processed_frames)
+        return obs
 
     def close(self):
         """
