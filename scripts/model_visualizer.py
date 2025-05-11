@@ -11,9 +11,9 @@ from pathlib import Path
 class ModelVisualizer:
     def __init__(self):
         self.model_dirs = {
-            'Ms. Pac-Man (MuZero, n=50)': 'atari_ms_pacman_mz_2bx64_n50-78660b-dirty',
-            'Ms. Pac-Man (MuZero, n=5)': 'atari_ms_pacman_mz_2bx64_n5-105390',
-            'Ms. Pac-Man (MuZero, n=1)': 'atari_ms_pacman_mz_2bx64_n1-78660b-dirty'
+            'Ms. Pac-Man (MuZero, n=50)': 'mz_50',
+            'Ms. Pac-Man (MuZero, n=5)': 'mz_5',
+            'Ms. Pac-Man (MuZero, n=1)': 'mz_1'
         }
         # Create a mapping of step numbers to iteration numbers
         self.steps_to_iterations = {
@@ -76,7 +76,7 @@ class ModelVisualizer:
         """Display video of model gameplay for specific iteration"""
         try:
             # Construct the video path using the correct structure
-            video_path = model_dir / 'result_video' / f'ms_pacman-{iteration}itr.mp4'
+            video_path = Path(model_dir) / 'result_video' / f'ms_pacman-{iteration}itr.mp4'
             
             if not video_path.exists():
                 print(f"No video found at {video_path}")
@@ -91,7 +91,7 @@ class ModelVisualizer:
         """Display performance graph of the model"""
         try:
             # Find the performance graph
-            graph_path = Path('minizero') / model_dir / 'analysis' / 'Return.png'
+            graph_path = Path(model_dir) / 'analysis' / 'Return.png'
             if not graph_path.exists():
                 print(f"No performance graph found in {model_dir}")
                 return

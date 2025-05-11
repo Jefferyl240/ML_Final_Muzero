@@ -1,0 +1,5 @@
+====================================================================================================
+[2025/05/11_11:01:19.527] [Worker Connection] docker-desktop_0 sp
+[2025/05/11_11:01:19.529] [Log] docker-desktop_0 sp: CUDA_VISIBLE_DEVICES=0 build/atari/minizero_atari -mode sp -conf_file atari_ms_pacman_mz_2bx64_n5-105390/atari_ms_pacman_mz_2bx64_n5-105390.cfg -conf_str "nn_file_name=atari_ms_pacman_mz_2bx64_n5-105390/model/weight_iter_0.pt:program_auto_seed=false:program_seed=581869302:zero_training_directory=atari_ms_pacman_mz_2bx64_n5-105390:zero_num_threads=4:zero_num_parallel_games=64:program_quiet=true"
+[2025/05/11_11:01:20.511] [Worker Connection] docker-desktop_0 op
+[2025/05/11_11:01:20.512] [Log] docker-desktop_0 op: CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. python minizero/learner/train.py atari atari_ms_pacman_mz_2bx64_n5-105390 atari_ms_pacman_mz_2bx64_n5-105390/atari_ms_pacman_mz_2bx64_n5-105390.cfg
