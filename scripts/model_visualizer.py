@@ -15,6 +15,16 @@ class ModelVisualizer:
             'Ms. Pac-Man (MuZero, n=5)': 'atari_ms_pacman_mz_2bx64_n5-105390',
             'Ms. Pac-Man (MuZero, n=1)': 'atari_ms_pacman_mz_2bx64_n1-78660b-dirty'
         }
+        # Create a mapping of step numbers to iteration numbers
+        self.steps_to_iterations = {
+            200: 1,
+            10000: 50,
+            20000: 100,
+            30000: 150,
+            40000: 200,
+            50000: 250,
+            60000: 300
+        }
         
     def setup_ui(self):
         """Create the user interface widgets"""
@@ -30,6 +40,12 @@ class ModelVisualizer:
             style={'description_width': 'initial'}
         )
         
+        self.steps_dropdown = widgets.Dropdown(
+            options=list(self.steps_to_iterations.keys()),
+            description='Select Steps:',
+            style={'description_width': 'initial'}
+        )
+        
         self.run_button = widgets.Button(
             description='Run Visualization',
             button_style='success'
@@ -41,30 +57,33 @@ class ModelVisualizer:
         display(HTML("<h2>MiniZero Model Visualizer</h2>"))
         display(self.model_dropdown)
         display(self.visualization_type)
+        display(self.steps_dropdown)
         display(self.run_button)
         
     def run_visualization(self, b):
         """Handle visualization based on user selection"""
         selected_model = self.model_dirs[self.model_dropdown.value]
         viz_type = self.visualization_type.value
+        selected_steps = self.steps_dropdown.value
+        selected_iteration = self.steps_to_iterations[selected_steps]
         
         if viz_type == 'Video':
-            self.show_video(selected_model)
+            self.show_video(selected_model, selected_iteration)
         else:
             self.show_performance_graph(selected_model)
     
-    def show_video(self, model_dir):
-        """Display video of model gameplay"""
+    def show_video(self, model_dir, iteration):
+        """Display video of model gameplay for specific iteration"""
         try:
-            # Find the latest video in the model directory
-            video_dir = Path(model_dir) / 'videos'
+            # Find the video in the result_video folder for the specific iteration
+            video_dir = Path(model_dir) / 'result_video' / str(iteration)
             if not video_dir.exists():
-                print(f"No videos found in {model_dir}")
+                print(f"No video found for iteration {iteration} in {model_dir}")
                 return
                 
             video_files = list(video_dir.glob('*.mp4'))
             if not video_files:
-                print("No video files found")
+                print(f"No video files found for iteration {iteration}")
                 return
                 
             latest_video = max(video_files, key=lambda x: x.stat().st_mtime)
