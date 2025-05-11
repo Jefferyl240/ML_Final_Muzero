@@ -48,13 +48,27 @@ class ModelPlayer:
     def load_model(self, model_dir):
         """Load the selected model"""
         try:
-            model_path = Path(model_dir) / 'model' / 'model.pth'
+            # Try to load .pt file first
+            model_path = Path(model_dir) / 'model' / 'model.pt'
             if not model_path.exists():
-                print(f"No model found at {model_path}")
-                return None
-                
-            # Load model (you'll need to adjust this based on your model architecture)
-            model = torch.load(model_path)
+                # If .pt doesn't exist, try .pkl
+                model_path = Path(model_dir) / 'model' / 'model.pkl'
+                if not model_path.exists():
+                    print(f"No model found at {model_dir}/model/")
+                    return None
+            
+            # Load model based on file extension
+            if model_path.suffix == '.pt':
+                model = torch.load(model_path)
+            else:  # .pkl file
+                import pickle
+                with open(model_path, 'rb') as f:
+                    model = pickle.load(f)
+            
+            # Ensure model is in eval mode
+            if hasattr(model, 'eval'):
+                model.eval()
+            
             return model
             
         except Exception as e:
