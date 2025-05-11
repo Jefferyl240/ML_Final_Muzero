@@ -111,6 +111,8 @@ def graph_print(tmp, iter):
                 set_learner_training_step = False
     for index in range(len(lines)):
         counter = 0
+        # Dictionary to store returns for each step
+        step_returns = {}  # key: step number, value: list of returns at that step
         for line in lines[index]:
             if iter != -1 and counter >= iter:
                 break
@@ -119,26 +121,46 @@ def graph_print(tmp, iter):
                 counter = int(ret2[0][2])
             ret1 = re.findall(r'(\[SelfPlay Avg. Game Returns\])\s(-?\d+\.\d+|\d+)', line)
             if ret1 != []:
-                key = f"[SelfPlay Avg. Game Returns] {index}"
-                if key not in myDict:
-                    myDict[key] = []
-                myDict[key].append(float(ret1[0][1]))
-                if f"[Iteration] {index}" not in myDict:
-                    myDict[f"[Iteration] {index}"] = []
-                myDict[f"[Iteration] {index}"].append(counter)
+                if counter not in step_returns:
+                    step_returns[counter] = []
+                step_returns[counter].append(float(ret1[0][1]))
+        
+        # Calculate mean for each step
+        steps = sorted(step_returns.keys())
+        mean_returns = []
+        for step in steps:
+            mean_returns.append(sum(step_returns[step]) / len(step_returns[step]))
+        
+        myDict[f"[SelfPlay Avg. Game Returns] {index}"] = mean_returns
+        myDict[f"[Iteration] {index}"] = steps
+
     plt.rcParams.update({'font.size': 30})
     plt.figure(figsize=(25, 20))
     for index in range(len(tmp)):
         bool_print = True
         width = 4
-        plt.plot([x * nn_step[index] for x in myDict[f"[Iteration] {index}"]], myDict[f"[SelfPlay Avg. Game Returns] {index}"], label=tmp[index], linewidth=width)
+        # Extract simulation number from directory name
+        sim_num = re.search(r'n(\d+)', tmp[index])
+        if sim_num:
+            label = f'Simulations: {sim_num.group(1)}'
+        else:
+            label = tmp[index]
+        plt.plot([x * nn_step[index] for x in myDict[f"[Iteration] {index}"]], 
+                myDict[f"[SelfPlay Avg. Game Returns] {index}"], 
+                label=label, 
+                linewidth=width)
     if bool_print:
-        plt.title(f'[SelfPlay Avg. Game Returns] graph', fontsize=30)
+        plt.title(f'Mean Returns per Step', fontsize=30)
         plt.legend(loc='upper center', bbox_to_anchor=(0.5, -0.05), ncol=1)
-        plt.xlabel('nn steps', fontsize=30)
-        plt.ylabel('Return', fontsize=30)
+        plt.xlabel('Neural Network Steps (K)', fontsize=30)
+        plt.ylabel('Mean Return', fontsize=30)
         plt.grid()
         plt.tight_layout()
+        
+        # Format x-axis to show K units
+        ax = plt.gca()
+        ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, p: f'{x/1000:.0f}K'))
+        
         plt.show()
         plt.savefig("compare_graph")
         eprint("compare_graph")
