@@ -75,19 +75,14 @@ class ModelVisualizer:
     def show_video(self, model_dir, iteration):
         """Display video of model gameplay for specific iteration"""
         try:
-            # Find the video in the result_video folder for the specific iteration
-            video_dir = Path(model_dir) / 'result_video' / str(iteration)
-            if not video_dir.exists():
-                print(f"No video found for iteration {iteration} in {model_dir}")
+            # Construct the video path using the correct structure
+            video_path = model_dir / 'result_video' / f'ms_pacman-{iteration}itr.mp4'
+            
+            if not video_path.exists():
+                print(f"No video found at {video_path}")
                 return
                 
-            video_files = list(video_dir.glob('*.mp4'))
-            if not video_files:
-                print(f"No video files found for iteration {iteration}")
-                return
-                
-            latest_video = max(video_files, key=lambda x: x.stat().st_mtime)
-            display(Video(str(latest_video)))
+            display(Video(str(video_path)))
             
         except Exception as e:
             print(f"Error displaying video: {str(e)}")
@@ -96,7 +91,7 @@ class ModelVisualizer:
         """Display performance graph of the model"""
         try:
             # Find the performance graph
-            graph_path = Path(model_dir) / 'analysis' / 'Return.png'
+            graph_path = Path('minizero') / model_dir / 'analysis' / 'Return.png'
             if not graph_path.exists():
                 print(f"No performance graph found in {model_dir}")
                 return
