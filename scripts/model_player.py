@@ -1,5 +1,58 @@
 import os
 import sys
+import subprocess
+
+# Install required packages
+def install_requirements():
+    """Install required packages for Colab"""
+    # First install ale-py
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'ale-py'])
+    
+    # Then install other packages
+    packages = [
+        'opencv-python',
+        'numpy',
+        'torch'
+    ]
+    
+    for package in packages:
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
+    
+    # Create roms directory if it doesn't exist
+    roms_dir = os.path.join(os.getcwd(), 'roms')
+    os.makedirs(roms_dir, exist_ok=True)
+    
+    # Download Ms Pacman ROM if it doesn't exist
+    rom_path = os.path.join(roms_dir, 'ms_pacman.bin')
+    if not os.path.exists(rom_path):
+        try:
+            import urllib.request
+            print("Downloading Ms Pacman ROM...")
+            urllib.request.urlretrieve(
+                "https://raw.githubusercontent.com/mgbellemare/Arcade-Learning-Environment/master/roms/ms_pacman.bin",
+                rom_path
+            )
+            print(f"ROM downloaded to: {rom_path}")
+        except Exception as e:
+            print(f"Error downloading ROM: {str(e)}")
+            print("Please download ms_pacman.bin manually and place it in the ./roms directory")
+            return False
+    
+    # Verify ROM can be loaded
+    try:
+        from ale_py import ALEInterface
+        ale = ALEInterface()
+        ale.loadROM(rom_path)
+        print(f"ROM loaded successfully from: {rom_path}")
+        return True
+    except Exception as e:
+        print(f"Error loading ROM: {str(e)}")
+        return False
+
+# Install requirements if running in Colab
+if 'google.colab' in sys.modules:
+    install_requirements()
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,9 +61,9 @@ import ipywidgets as widgets
 from google.colab import files, output
 import base64
 from pathlib import Path
-import gym
 import cv2
 from collections import deque
+from ale_py import ALEInterface
 
 class ModelPlayer:
     def __init__(self):
@@ -19,7 +72,7 @@ class ModelPlayer:
             'Ms. Pac-Man (MuZero, n=5)': 'mz_5',
             'Ms. Pac-Man (MuZero, n=1)': 'mz_1'
         }
-        self.env = None
+        self.ale = None
         self.model = None
         self.video_output = widgets.Output()
         self.frames = []
@@ -59,7 +112,12 @@ class ModelPlayer:
             
             # Load model based on file extension
             if model_path.suffix == '.pt':
-                model = torch.load(model_path)
+                # Try loading as TorchScript model first
+                try:
+                    model = torch.jit.load(str(model_path))
+                except:
+                    # If that fails, try loading as regular PyTorch model
+                    model = torch.load(str(model_path), weights_only=False)
             else:  # .pkl file
                 import pickle
                 with open(model_path, 'rb') as f:
@@ -80,6 +138,8 @@ class ModelPlayer:
         # Resize to 84x84 and convert to grayscale
         frame = cv2.resize(frame, (84, 84))
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        # Normalize to [0, 1]
+        frame = frame.astype(np.float32) / 255.0
         return frame
         
     def play_game(self, b):
@@ -98,17 +158,27 @@ class ModelPlayer:
                     print("Failed to load model")
                 return
                 
-            # Create environment
-            self.env = gym.make('ALE/MsPacman-v5')
-            self.env = gym.wrappers.AtariPreprocessing(self.env, 
-                                                     frame_skip=4,
-                                                     grayscale_obs=True,
-                                                     scale_obs=True)
+            # Create ALE environment
+            self.ale = ALEInterface()
+            self.ale.setInt('random_seed', 123)
+            self.ale.setInt('frame_skip', 4)
+            self.ale.setFloat('repeat_action_probability', 0.0)
+            
+            # Load ROM from local path
+            rom_path = os.path.join(os.getcwd(), 'roms', 'ms_pacman.bin')
+            if not os.path.exists(rom_path):
+                with self.video_output:
+                    print(f"ROM not found at {rom_path}")
+                    print("Please run install_requirements() first")
+                return
+                
+            self.ale.loadROM(rom_path)
             
             # Initialize frame buffer
             frame_buffer = deque(maxlen=4)
-            obs = self.env.reset()
-            frame_buffer.append(obs)
+            self.ale.reset_game()
+            screen = self.ale.getScreenRGB()
+            frame_buffer.append(self.preprocess_frame(screen))
             
             # Play game
             done = False
@@ -118,18 +188,24 @@ class ModelPlayer:
             while not done:
                 # Get current state
                 state = np.stack(frame_buffer)
+                # Convert to tensor and add batch dimension
+                state = torch.FloatTensor(state).unsqueeze(0)  # Shape: [1, 4, 84, 84]
                 
                 # Get model prediction
                 with torch.no_grad():
                     action = self.model(state)
                 
                 # Take action
-                obs, reward, done, info = self.env.step(action)
-                frame_buffer.append(obs)
+                reward = self.ale.act(action)
                 total_reward += reward
+                done = self.ale.game_over()
+                
+                # Get new screen
+                screen = self.ale.getScreenRGB()
+                frame_buffer.append(self.preprocess_frame(screen))
                 
                 # Store frame for video
-                self.frames.append(self.env.render(mode='rgb_array'))
+                self.frames.append(screen)
                 
             # Create video
             self.create_video()
@@ -140,9 +216,6 @@ class ModelPlayer:
         except Exception as e:
             with self.video_output:
                 print(f"Error playing game: {str(e)}")
-        finally:
-            if self.env is not None:
-                self.env.close()
                 
     def create_video(self):
         """Create and display video from frames"""
