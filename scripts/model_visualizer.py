@@ -1,12 +1,13 @@
 import os
 import sys
 import subprocess
-from IPython.display import display, HTML, Video
+from IPython.display import display, HTML, Video, clear_output
 import ipywidgets as widgets
-from google.colab import files
+from google.colab import files, output
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
+import base64
 
 class ModelVisualizer:
     def __init__(self):
@@ -25,6 +26,7 @@ class ModelVisualizer:
             50000: 250,
             60000: 300
         }
+        self.video_output = widgets.Output()
         
     def setup_ui(self):
         """Create the user interface widgets"""
@@ -59,6 +61,7 @@ class ModelVisualizer:
         display(self.visualization_type)
         display(self.steps_dropdown)
         display(self.run_button)
+        display(self.video_output)
         
     def run_visualization(self, b):
         """Handle visualization based on user selection"""
@@ -67,25 +70,52 @@ class ModelVisualizer:
         selected_steps = self.steps_dropdown.value
         selected_iteration = self.steps_to_iterations[selected_steps]
         
+        # Clear previous output
+        self.video_output.clear_output(wait=True)
+        
         if viz_type == 'Video':
             self.show_video(selected_model, selected_iteration)
         else:
             self.show_performance_graph(selected_model)
     
     def show_video(self, model_dir, iteration):
-        """Display video of model gameplay for specific iteration"""
+        """Display video of model gameplay for specific iteration (Colab-compatible)"""
         try:
-            # Construct the video path using the correct structure
+            # Construct the video path
             video_path = Path(model_dir) / 'result_video' / f'ms_pacman-{iteration}itr.mp4'
             
             if not video_path.exists():
-                print(f"No video found at {video_path}")
+                with self.video_output:
+                    self.video_output.clear_output(wait=True)
+                    print(f"No video found at {video_path}")
                 return
+
+            # Move video to /content to ensure Colab can access it via relative path
+            temp_video_path = f"/content/{video_path.name}"
+            os.system(f"cp {video_path} {temp_video_path}")
+
+            with self.video_output:
+                                # Read the video file
+                with open(video_path, 'rb') as f:
+                    video_data = f.read()
                 
-            display(Video(str(video_path)))
-            
+                # Convert to base64
+                video_b64 = base64.b64encode(video_data).decode()
+                
+                # Create HTML5 video element
+                video_html = f'''
+                <video width="640" height="480" controls>
+                    <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+                '''
+                display(HTML(video_html))
+
         except Exception as e:
-            print(f"Error displaying video: {str(e)}")
+            with self.video_output:
+                self.video_output.clear_output(wait=True)
+                print(f"Error displaying video: {str(e)}")
+
     
     def show_performance_graph(self, model_dir):
         """Display performance graph of the model"""
@@ -93,18 +123,21 @@ class ModelVisualizer:
             # Find the performance graph
             graph_path = Path(model_dir) / 'analysis' / 'Return.png'
             if not graph_path.exists():
-                print(f"No performance graph found in {model_dir}")
+                with self.video_output:
+                    print(f"No performance graph found in {model_dir}")
                 return
-                
-            plt.figure(figsize=(10, 6))
-            img = plt.imread(str(graph_path))
-            plt.imshow(img)
-            plt.axis('off')
-            plt.title(f'Performance Graph - {self.model_dropdown.value}')
-            plt.show()
+            
+            with self.video_output:
+                plt.figure(figsize=(10, 6))
+                img = plt.imread(str(graph_path))
+                plt.imshow(img)
+                plt.axis('off')
+                plt.title(f'Performance Graph - {self.model_dropdown.value}')
+                plt.show()
             
         except Exception as e:
-            print(f"Error displaying performance graph: {str(e)}")
+            with self.video_output:
+                print(f"Error displaying performance graph: {str(e)}")
 
 def main():
     visualizer = ModelVisualizer()
