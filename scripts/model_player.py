@@ -211,8 +211,12 @@ class ModelPlayer:
             print(f"Error loading config: {str(e)}")
             return False
 
-    def log(self, message):
-      display(HTML(f"<pre>{message}</pre>"))
+    def log(self, is_processing):
+        with self.log_output:
+            clear_output(wait=True)
+            if is_processing:
+                display(HTML(f"<pre style='color: green; font-weight: bold;'>Processing...</pre>"))
+
 
     def setup_ui(self):
         """Create the user interface widgets"""
@@ -379,12 +383,9 @@ class ModelPlayer:
         
         # Run simulations sequentially
         num_simulations = self.mcts_config['num_simulations']
-        print("Still processing...", end='\r')
+        self.log(True)
         
         for sim_idx in range(num_simulations):
-
-            self.log(f"Running MCTS Simulation {sim_idx + 1}/{num_simulations}")
-            time.sleep(0.001)  # Yield control briefly to allow UI to refresh
             # Selection
             node = root
             search_path = [node]
@@ -475,6 +476,8 @@ class ModelPlayer:
             
             # Clear previous output
             self.video_output.clear_output(wait=True)
+            self.log(True)  # Show 'Processing...' at start
+
             
             self.log("Processing...")
             
@@ -575,6 +578,7 @@ class ModelPlayer:
                 
             # Create video
             self.create_video()
+            self.log(False)  # Clear 'Processing...' at end
             
             with self.video_output:
                 print("--------------------------------")
