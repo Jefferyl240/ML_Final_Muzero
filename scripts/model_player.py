@@ -216,31 +216,12 @@ class ModelPlayer:
         with self.log_output:
             clear_output(wait=True)
             if is_processing:
-                # Use HTML with a fixed-width font and monospace for better terminal-like display
-                display(HTML(f"""
-                    <div style='font-family: monospace; white-space: pre; background-color: #f0f0f0; padding: 10px; border-radius: 5px;'>
-                        <span style='color: green; font-weight: bold;'>{message}</span>
-                    </div>
-                """))
+                print(f"\033[92m{message}\033[0m")  # Green color for processing
             else:
-                # Regular messages in a terminal-like format
-                display(HTML(f"""
-                    <div style='font-family: monospace; white-space: pre; padding: 5px;'>
-                        {message}
-                    </div>
-                """))
-            # Force display update in Colab
-            if 'google.colab' in sys.modules:
-                output.eval_js('google.colab.output.setIframeHeight(0, true, {maxHeight: 5000})')
+                print(message)
 
     def setup_ui(self):
         """Create the user interface widgets"""
-        # Create a container for all UI elements
-        self.ui_container = widgets.VBox()
-        
-        # Add header
-        header = widgets.HTML("<h2>MiniZero Model Player</h2>")
-        
         # Create model selection dropdown
         self.model_dropdown = widgets.Dropdown(
             options=list(self.model_dirs.keys()),
@@ -255,22 +236,14 @@ class ModelPlayer:
         )
         self.play_button.on_click(self.play_game)
         
-        # Add all elements to container
-        self.ui_container.children = [
-            header,
-            self.model_dropdown,
-            self.play_button,
-            self.video_output,
-            self.log_output
-        ]
-        
-        # Display the container
-        display(self.ui_container)
-        
-        # Force display update in Colab
-        if 'google.colab' in sys.modules:
-            output.eval_js('google.colab.output.setIframeHeight(0, true, {maxHeight: 5000})')
-        
+        # Display widgets
+        print("MiniZero Model Player")
+        print("--------------------")
+        display(self.model_dropdown)
+        display(self.play_button)
+        display(self.video_output)
+        display(self.log_output)
+
     def load_model(self, model_path):
         """Load the trained model."""
         try:
@@ -624,9 +597,8 @@ class ModelPlayer:
             
         except Exception as e:
             self.log(f"Error playing game: {str(e)}")
-            with self.video_output:
-                import traceback
-                traceback.print_exc()
+            import traceback
+            traceback.print_exc()
                 
     def create_video(self):
         """Create and display video from frames"""
