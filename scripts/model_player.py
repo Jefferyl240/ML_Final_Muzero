@@ -6,6 +6,8 @@ import random
 import configparser
 import glob
 import re
+import time
+from IPython.display import display, HTML, clear_output
 
 # Install required packages
 def install_requirements():
@@ -143,6 +145,7 @@ class ModelPlayer:
         self.repeat_action_probability = 0.25  # Match training setting
         self.value_min = float('inf')  # Track min value for rescaling
         self.value_max = float('-inf')  # Track max value for rescaling
+        self.log_output = widgets.Output()
         
     def load_config(self, model_dir):
         """Load network and MCTS configuration from the model's config file"""
@@ -207,7 +210,10 @@ class ModelPlayer:
         except Exception as e:
             print(f"Error loading config: {str(e)}")
             return False
-        
+
+    def log(self, message):
+      display(HTML(f"<pre>{message}</pre>"))
+
     def setup_ui(self):
         """Create the user interface widgets"""
         self.model_dropdown = widgets.Dropdown(
@@ -228,6 +234,7 @@ class ModelPlayer:
         display(self.model_dropdown)
         display(self.play_button)
         display(self.video_output)
+        display(self.log_output)
         
     def load_model(self, model_path):
         """Load the trained model."""
@@ -375,6 +382,9 @@ class ModelPlayer:
         print("Still processing...", end='\r')
         
         for sim_idx in range(num_simulations):
+
+            self.log(f"Running MCTS Simulation {sim_idx + 1}/{num_simulations}")
+            time.sleep(0.001)  # Yield control briefly to allow UI to refresh
             # Selection
             node = root
             search_path = [node]
@@ -466,18 +476,18 @@ class ModelPlayer:
             # Clear previous output
             self.video_output.clear_output(wait=True)
             
-            print("Processing...", end='\r')
+            self.log("Processing...")
             
             # Get selected model
             selected_model = self.model_dirs[self.model_dropdown.value]
-            print(f"Selected model: {selected_model}")
+            self.log(f"Selected model: {selected_model}")
             
             # Load MCTS config first
             if not self.load_config(selected_model):
                 with self.video_output:
                     print("Failed to load MCTS config")
                 return
-            print("MCTS config loaded successfully")
+            self.log("MCTS config loaded successfully")
             
             # Load model
             loaded_model = self.load_model(selected_model)
@@ -487,7 +497,7 @@ class ModelPlayer:
                 return
             
             self.model = loaded_model
-            print("Model loaded successfully")
+            self.log("Model loaded successfully")
                 
             # Create ALE environment
             self.ale = ALEInterface()
@@ -506,9 +516,8 @@ class ModelPlayer:
                 return
                 
             self.ale.loadROM(rom_path)
-            print("ROM loaded successfully")
+            self.log("ROM loaded successfully")
             print("--------------------------------")
-            print("Processing...", end='\r')
             
             # Initialize frame buffer and action buffer
             frame_buffer = deque(maxlen=ATARI_FEATURE_HISTORY_SIZE)
@@ -618,7 +627,8 @@ class ModelPlayer:
             '''
             
             with self.video_output:
-                display(HTML(video_html))
+              clear_output(wait=True)
+              display(HTML(video_html))
                 
         except Exception as e:
             with self.video_output:
