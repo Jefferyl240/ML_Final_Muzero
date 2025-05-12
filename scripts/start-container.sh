@@ -52,12 +52,12 @@ if [ "$record_history" = true ]; then
 	if [ ! -d ${history_dir} ]; then
 		mkdir -p ${history_dir}
 		# start container with the history directory and copy the history to the history directory
-		$container_tool run --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --rm -it -v "${history_dir}:/container_root" ${image_name} /bin/bash -c "cp -r /root/. /container_root && touch /container_root/.bash_history && exit"
+		$container_tool run --gpus all --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --rm -it -v "${history_dir}:/container_root" ${image_name} /bin/bash -c "cp -r /root/. /container_root && touch /container_root/.bash_history && exit"
 	fi
 	# add the history directory to the container volume
 	container_volume="${container_volume} -v ${history_dir}:/root"
 fi
 
 container_argumenets=$(echo ${container_argumenets} | xargs)
-echo "$container_tool run ${container_argumenets} --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --network=host --ipc=host --rm -it ${container_volume} ${image_name}"
-$container_tool run ${container_argumenets} --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --network=host --ipc=host --rm -it ${container_volume} ${image_name}
+echo "$container_tool run ${container_argumenets} --gpus all --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --network=host --ipc=host --rm -it ${container_volume} ${image_name}"
+$container_tool run ${container_argumenets} --gpus all --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --network=host --ipc=host --rm -it ${container_volume} ${image_name}
