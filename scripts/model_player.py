@@ -4,6 +4,8 @@ import subprocess
 import math
 import random
 import configparser
+import glob
+import re
 
 # Install required packages
 def install_requirements():
@@ -76,21 +78,50 @@ ATARI_REPEAT_ACTION_PROBABILITY = 0.25
 ATARI_ACTION_SIZE = 18  # Number of possible actions
 
 class MCTSNode:
-    def __init__(self, prior=0.0):
+    def __init__(self):
         self.visit_count = 0
-        self.prior = prior
         self.value_sum = 0.0
         self.children = {}
         self.hidden_state = None
         self.reward = 0.0
+        self.prior = 0.0
+        self.value = 0.0
+        self.hidden_state_index = -1
+        self.virtual_loss = 0.0
 
     def expanded(self):
         return len(self.children) > 0
 
-    def value(self):
+    def get_mean(self):
         if self.visit_count == 0:
             return 0.0
         return self.value_sum / self.visit_count
+
+    def get_value(self):
+        return self.reward + self.get_mean()
+
+    def add_exploration_noise(self, dirichlet_alpha, exploration_fraction):
+        """Add exploration noise to the prior probabilities."""
+        actions = list(self.children.keys())
+        noise = np.random.dirichlet([dirichlet_alpha] * len(actions))
+        for a, n in zip(actions, noise):
+            self.children[a].prior = (
+                self.children[a].prior * (1 - exploration_fraction) 
+                + n * exploration_fraction
+            )
+
+    def ucb_score(self, parent_visit_count, ucb_base, ucb_init, reward_discount):
+        """Calculate the UCB score for this node."""
+        if self.visit_count == 0:
+            return float('inf')
+        
+        prior_score = (
+            ucb_init * self.prior * 
+            math.sqrt(parent_visit_count) / 
+            (1 + self.visit_count)
+        )
+        value_score = -self.get_value()  # Negative because we want to maximize
+        return value_score + prior_score
 
 class ModelPlayer:
     def __init__(self):
@@ -107,25 +138,62 @@ class ModelPlayer:
         self.mcts_config = None
         
     def load_config(self, model_dir):
-        """Load MCTS configuration from the model's config file"""
+        """Load network and MCTS configuration from the model's config file"""
         try:
             config_path = Path(model_dir) / 'config.cfg'
             if not config_path.exists():
                 print(f"No config file found at {config_path}")
                 return False
                 
-            config = configparser.ConfigParser()
-            config.read(config_path)
+            # Read config file as text
+            with open(config_path, 'r') as f:
+                config_lines = f.readlines()
             
-            # Load MCTS parameters
-            self.mcts_config = {
-                'num_simulations': config.getint('actor', 'num_simulation'),
-                'puct_base': config.getint('actor', 'mcts_puct_base'),
-                'puct_init': config.getfloat('actor', 'mcts_puct_init'),
-                'reward_discount': config.getfloat('actor', 'mcts_reward_discount'),
-                'temperature': config.getfloat('actor', 'select_action_softmax_temperature')
+            # Parse config values
+            config_values = {}
+            for line in config_lines:
+                # Skip comments and empty lines
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                    
+                # Parse key-value pairs
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    value = value.split('#')[0].strip()  # Remove comments
+                    config_values[key] = value
+            
+            # Network parameters
+            self.network_config = {
+                'num_input_channels': int(config_values.get('nn_num_input_channels', '32')),
+                'input_channel_height': int(config_values.get('nn_input_channel_height', '96')),
+                'input_channel_width': int(config_values.get('nn_input_channel_width', '96')),
+                'num_hidden_channels': int(config_values.get('nn_num_hidden_channels', '256')),
+                'hidden_channel_height': int(config_values.get('nn_hidden_channel_height', '6')),
+                'hidden_channel_width': int(config_values.get('nn_hidden_channel_width', '6')),
+                'num_blocks': int(config_values.get('nn_num_blocks', '10')),
+                'action_size': int(config_values.get('nn_action_size', '18')),
+                'num_value_hidden_channels': int(config_values.get('nn_num_value_hidden_channels', '256')),
+                'discrete_value_size': int(config_values.get('nn_discrete_value_size', '601')),
+                'num_action_feature_channels': int(config_values.get('nn_num_action_feature_channels', '18'))
             }
+            
+            # MCTS parameters
+            self.mcts_config = {
+                'num_simulations': int(config_values.get('actor_num_simulation', '50')),
+                'puct_base': int(config_values.get('actor_mcts_puct_base', '19652')),
+                'puct_init': float(config_values.get('actor_mcts_puct_init', '1.25')),
+                'reward_discount': float(config_values.get('actor_mcts_reward_discount', '0.997')),
+                'temperature': float(config_values.get('actor_select_action_softmax_temperature', '1.0')),
+                'dirichlet_alpha': float(config_values.get('actor_mcts_dirichlet_alpha', '0.3')),
+                'dirichlet_fraction': float(config_values.get('actor_mcts_dirichlet_fraction', '0.25'))
+            }
+            
+            print(f"Loaded network config: {self.network_config}")
+            print(f"Loaded MCTS config: {self.mcts_config}")
             return True
+            
         except Exception as e:
             print(f"Error loading config: {str(e)}")
             return False
@@ -151,41 +219,25 @@ class ModelPlayer:
         display(self.play_button)
         display(self.video_output)
         
-    def load_model(self, model_dir):
-        """Load the selected model"""
+    def load_model(self, model_path):
+        """Load a model from the given path"""
         try:
-            # Load config first
-            if not self.load_config(model_dir):
+            model_path = os.path.join(os.getcwd(), model_path, 'model', 'model.pt')
+            model = torch.jit.load(model_path)
+            model.eval()
+            model.to(self.device)
+            
+            # Check if this is a MuZeroAtariNetwork
+            if hasattr(model, 'get_type_name'):
+                model_type = model.get_type_name()
+                print(f"Loaded model type: {model_type}")
+                if model_type != "muzero_atari":
+                    print(f"Error: Expected muzero_atari model, got {model_type}")
+                    return None
+            else:
+                print("Error: Model does not have get_type_name method")
                 return None
                 
-            # Try to load .pt file first
-            model_path = Path(model_dir) / 'model' / 'model.pt'
-            if not model_path.exists():
-                # If .pt doesn't exist, try .pkl
-                model_path = Path(model_dir) / 'model' / 'model.pkl'
-                if not model_path.exists():
-                    print(f"No model found at {model_dir}/model/")
-                    return None
-            
-            # Load model based on file extension
-            if model_path.suffix == '.pt':
-                # Try loading as TorchScript model first
-                try:
-                    model = torch.jit.load(str(model_path), map_location=self.device)
-                except:
-                    # If that fails, try loading as regular PyTorch model
-                    model = torch.load(str(model_path), map_location=self.device)
-            else:  # .pkl file
-                import pickle
-                with open(model_path, 'rb') as f:
-                    model = pickle.load(f)
-                    if isinstance(model, torch.nn.Module):
-                        model = model.to(self.device)
-            
-            # Ensure model is in eval mode
-            if hasattr(model, 'eval'):
-                model.eval()
-            
             return model
             
         except Exception as e:
@@ -203,113 +255,159 @@ class ModelPlayer:
         frame = frame.astype(np.float32) / 255.0
         return frame
 
-    def create_state_tensor(self, frame_buffer, action_buffer):
+    def create_state_tensor(self, frame_buffer, action_buffer, state_tensor):
         """Create state tensor from frame and action buffers"""
-        state = np.zeros((1, ATARI_FEATURE_HISTORY_SIZE * 4, ATARI_RESOLUTION, ATARI_RESOLUTION), dtype=np.float32)
-        
         # Fill state tensor with action and RGB features
         for i in range(ATARI_FEATURE_HISTORY_SIZE):
             # Action feature (1 channel)
             action_id = action_buffer[i]
-            state[0, i * 4] = action_id / ATARI_ACTION_SIZE
+            state_tensor[0, i * 4] = action_id / ATARI_ACTION_SIZE
             
             # RGB features (3 channels)
             frame = frame_buffer[i]
-            state[0, i * 4 + 1:i * 4 + 4] = frame.transpose(2, 0, 1)
+            state_tensor[0, i * 4 + 1:i * 4 + 4] = torch.from_numpy(frame.transpose(2, 0, 1))
         
-        return torch.FloatTensor(state).to(self.device)
+        print(f"State tensor range: [{state_tensor.min()}, {state_tensor.max()}]")
+        return state_tensor
+
+    def convert_value_logits(self, value_logits):
+        """Convert value logits to scalar value using expected value"""
+        # Create value bins from -300 to 300
+        bins = torch.linspace(-300, 300, 601, device=value_logits.device)
+        # Apply softmax to get probabilities
+        probs = torch.softmax(value_logits, dim=-1)
+        # Calculate expected value
+        value = (bins * probs).sum().item()
+        return value
 
     def run_mcts(self, state, root):
-        """Run MCTS from the given state"""
+        """Run Monte Carlo Tree Search from the given state"""
         if not self.mcts_config:
             print("MCTS config not loaded")
             return
-            
-        for _ in range(self.mcts_config['num_simulations']):
-            node = root
-            search_path = [node]
-            
-            # Selection
-            while node.expanded():
-                action, node = self.select_child(node)
-                search_path.append(node)
-            
-            # Expansion and evaluation
-            parent = search_path[-2]
-            action = list(parent.children.keys())[list(parent.children.values()).index(node)]
-            
-            # Get model prediction
-            with torch.no_grad():
-                model_output = self.model(state)
-                if isinstance(model_output, dict):
-                    policy = model_output.get('policy', model_output.get('policy_logit'))
-                    value = model_output.get('value', torch.tensor([0.0]))
-                    hidden_state = model_output.get('hidden_state')
-                else:
-                    policy = model_output
-                    value = torch.tensor([0.0])
-                    hidden_state = None
-                
-                # Ensure policy is 2D tensor [batch_size, num_actions]
-                if len(policy.shape) == 1:
-                    policy = policy.unsqueeze(0)
-                
-                # Convert policy to probabilities if needed
-                if policy.shape[1] != ATARI_ACTION_SIZE:
-                    policy = torch.softmax(policy, dim=1)
-            
-            # Expand node
-            for action_idx in range(ATARI_ACTION_SIZE):
-                prior = policy[0, action_idx].item()
-                node.children[action_idx] = MCTSNode(prior)
-            
-            node.hidden_state = hidden_state
-            
-            # Backup
-            self.backpropagate(search_path, value.item(), self.model)
-            
-            # Update state for next simulation
-            if hidden_state is not None:
-                state = hidden_state
 
-    def select_child(self, node):
-        """Select child node using PUCT formula"""
-        ucb_scores = []
-        for action, child in node.children.items():
-            ucb_score = self.ucb_score(node, child)
-            ucb_scores.append((action, child, ucb_score))
+        # Initial inference for root node
+        with torch.no_grad():
+            model_output = self.model(state)
         
-        # Select action with highest UCB score
-        action, child, _ = max(ucb_scores, key=lambda x: x[2])
-        return action, child
-
-    def ucb_score(self, parent, child):
-        """Calculate UCB score for a child node"""
-        # PUCT formula from config
-        prior_score = self.mcts_config['puct_init'] * child.prior * math.sqrt(parent.visit_count) / (1 + child.visit_count)
-        value_score = child.value()
-        return value_score + prior_score
-
-    def backpropagate(self, search_path, value, model):
-        """Backpropagate value through the search path"""
-        for node in reversed(search_path):
-            node.value_sum += value
-            node.visit_count += 1
-            value = node.reward + self.mcts_config['reward_discount'] * value
-
-    def select_action(self, root):
-        """Select action using softmax over visit counts"""
-        if not root.children:
-            return 0  # Default to action 0 if no children
+        # Convert policy to probabilities
+        policy = model_output['policy'][0].cpu().numpy()
+        
+        # Convert value logits to scalar
+        value_logits = model_output['value'][0]
+        value = self.convert_value_logits(value_logits)
+        
+        # Store hidden state
+        root.hidden_state = model_output['hidden_state']
+        
+        # Expand root node
+        for action, prob in enumerate(policy):
+            if prob > 0:
+                root.children[action] = MCTSNode()
+                root.children[action].prior = prob
+        
+        # Add exploration noise to root
+        root.add_exploration_noise(
+            dirichlet_alpha=0.3,  # From the MuZero paper
+            exploration_fraction=0.25
+        )
+        
+        # Batch size for parallel MCTS
+        batch_size = 8
+        
+        # Run simulations in batches
+        for sim_idx in range(0, self.mcts_config['num_simulations'], batch_size):
+            current_batch_size = min(batch_size, self.mcts_config['num_simulations'] - sim_idx)
             
+            # Prepare batch tensors
+            hidden_states = []
+            action_planes = []
+            search_paths = []
+            
+            # Selection phase for each simulation in batch
+            for _ in range(current_batch_size):
+                node = root
+                search_path = [node]
+                
+                while node.expanded():
+                    best_action = None
+                    best_ucb = float('-inf')
+                    
+                    for action, child in node.children.items():
+                        ucb = child.ucb_score(
+                            node.visit_count,
+                            self.mcts_config['puct_base'],
+                            self.mcts_config['puct_init'],
+                            self.mcts_config['reward_discount']
+                        )
+                        if ucb > best_ucb:
+                            best_action = action
+                            best_ucb = ucb
+                    
+                    node = node.children[best_action]
+                    search_path.append(node)
+                
+                # Store search path and prepare tensors
+                search_paths.append(search_path)
+                hidden_states.append(search_path[-2].hidden_state)
+                
+                # Create action plane for the selected action
+                action_plane = torch.zeros(
+                    (1, ATARI_ACTION_SIZE, self.network_config['hidden_channel_height'], self.network_config['hidden_channel_width']),
+                    dtype=torch.float32,
+                    device=self.device
+                )
+                action = list(search_path[-2].children.keys())[list(search_path[-2].children.values()).index(search_path[-1])]
+                action_plane[0, action] = 1.0
+                action_planes.append(action_plane)
+            
+            # Batch inference
+            with torch.no_grad():
+                # Stack tensors for batch processing
+                hidden_states_batch = torch.cat(hidden_states, dim=0)
+                action_planes_batch = torch.cat(action_planes, dim=0)
+                
+                # Run batch inference
+                model_outputs = self.model(hidden_states_batch, action_planes_batch)
+                
+                # Process results for each simulation
+                for i in range(current_batch_size):
+                    node = search_paths[i][-1]
+                    parent = search_paths[i][-2]
+                    
+                    # Get outputs for this simulation
+                    policy = model_outputs['policy'][i].cpu().numpy()
+                    value_logits = model_outputs['value'][i]
+                    value = self.convert_value_logits(value_logits)
+                    node.hidden_state = model_outputs['hidden_state'][i:i+1]  # Keep batch dimension
+                    
+                    # Expand node
+                    for action, prob in enumerate(policy):
+                        if prob > 0:
+                            node.children[action] = MCTSNode()
+                            node.children[action].prior = prob
+                    
+                    # Backpropagation
+                    for n in reversed(search_paths[i]):
+                        n.value_sum += value
+                        n.visit_count += 1
+                        value = n.reward + self.mcts_config['reward_discount'] * value
+
+    def select_action(self, root, temperature=1.0):
+        """Select action using visit count distribution."""
         visit_counts = np.array([child.visit_count for child in root.children.values()])
-        if self.mcts_config['temperature'] == 0:
-            action = np.argmax(visit_counts)
+        actions = list(root.children.keys())
+        
+        if temperature == 0:
+            action = actions[np.argmax(visit_counts)]
         else:
             # Apply temperature
-            visit_counts = visit_counts ** (1.0 / self.mcts_config['temperature'])
-            visit_counts = visit_counts / np.sum(visit_counts)
-            action = np.random.choice(len(visit_counts), p=visit_counts)
+            visit_count_dist = visit_counts ** (1.0 / temperature)
+            visit_count_dist = visit_count_dist / np.sum(visit_count_dist)
+            action = np.random.choice(actions, p=visit_count_dist)
+        
+        print(f"Visit counts: {dict(zip(actions, visit_counts))}")
+        print(f"Selected action: {action}")
         return action
         
     def play_game(self, b):
@@ -320,6 +418,7 @@ class ModelPlayer:
             
             # Get selected model
             selected_model = self.model_dirs[self.model_dropdown.value]
+            print(f"Selected model: {selected_model}")
             
             # Load model
             self.model = self.load_model(selected_model)
@@ -327,6 +426,15 @@ class ModelPlayer:
                 with self.video_output:
                     print("Failed to load model")
                 return
+                
+            print("Model loaded successfully")
+            
+            # Load MCTS config
+            if not self.load_config(selected_model):
+                with self.video_output:
+                    print("Failed to load MCTS config")
+                return
+            print("MCTS config loaded successfully")
                 
             # Create ALE environment
             self.ale = ALEInterface()
@@ -345,6 +453,7 @@ class ModelPlayer:
                 return
                 
             self.ale.loadROM(rom_path)
+            print("ROM loaded successfully")
             
             # Initialize frame buffer and action buffer
             frame_buffer = deque(maxlen=ATARI_FEATURE_HISTORY_SIZE)
@@ -363,10 +472,15 @@ class ModelPlayer:
             done = False
             total_reward = 0
             self.frames = []
+            step = 0
+            
+            # Pre-allocate tensors for better performance
+            state = torch.zeros((1, 32, ATARI_RESOLUTION, ATARI_RESOLUTION), dtype=torch.float32, device=self.device)
             
             while not done:
+                print(f"\nStep {step}")
                 # Create state tensor
-                state = self.create_state_tensor(frame_buffer, action_buffer)
+                self.create_state_tensor(frame_buffer, action_buffer, state)
                 
                 # Initialize MCTS root
                 root = MCTSNode()
@@ -390,6 +504,8 @@ class ModelPlayer:
                 # Store frame for video
                 self.frames.append(screen)
                 
+                step += 1
+                
             # Create video
             self.create_video()
             
@@ -400,6 +516,8 @@ class ModelPlayer:
         except Exception as e:
             with self.video_output:
                 print(f"Error playing game: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 
     def create_video(self):
         """Create and display video from frames"""
