@@ -6,6 +6,8 @@ import random
 import configparser
 import glob
 import re
+import matplotlib
+from matplotlib.animation import FuncAnimation
 
 # Install required packages
 def install_requirements():
@@ -565,11 +567,6 @@ class ModelPlayer:
                 print(f"Error creating video: {str(e)}")
                 import traceback
                 traceback.print_exc()
-
-
-
-
-
 
 
 def main():
