@@ -2,8 +2,6 @@
 build/
 __pycache__
 
-# configuration file
-*.cfg
 
 # training folder
 *_az_*/
