@@ -211,37 +211,65 @@ class ModelPlayer:
             print(f"Error loading config: {str(e)}")
             return False
 
-    def log(self, is_processing):
-      with self.log_output:
-          if is_processing:
-              clear_output(wait=True)
-              display(HTML(f"<pre style='color: green; font-weight: bold;'>Processing...</pre>"))
-          else:
-              clear_output(wait=True)  # Just clear the message when done
-
-
+    def log(self, message, is_processing=False):
+        """Log a message to the output widget"""
+        with self.log_output:
+            clear_output(wait=True)
+            if is_processing:
+                # Use HTML with a fixed-width font and monospace for better terminal-like display
+                display(HTML(f"""
+                    <div style='font-family: monospace; white-space: pre; background-color: #f0f0f0; padding: 10px; border-radius: 5px;'>
+                        <span style='color: green; font-weight: bold;'>{message}</span>
+                    </div>
+                """))
+            else:
+                # Regular messages in a terminal-like format
+                display(HTML(f"""
+                    <div style='font-family: monospace; white-space: pre; padding: 5px;'>
+                        {message}
+                    </div>
+                """))
+            # Force display update in Colab
+            if 'google.colab' in sys.modules:
+                output.eval_js('google.colab.output.setIframeHeight(0, true, {maxHeight: 5000})')
 
     def setup_ui(self):
         """Create the user interface widgets"""
+        # Create a container for all UI elements
+        self.ui_container = widgets.VBox()
+        
+        # Add header
+        header = widgets.HTML("<h2>MiniZero Model Player</h2>")
+        
+        # Create model selection dropdown
         self.model_dropdown = widgets.Dropdown(
             options=list(self.model_dirs.keys()),
             description='Select Model:',
             style={'description_width': 'initial'}
         )
         
+        # Create play button
         self.play_button = widgets.Button(
             description='Play Game',
             button_style='success'
         )
-        
         self.play_button.on_click(self.play_game)
         
-        # Display widgets
-        display(HTML("<h2>MiniZero Model Player</h2>"))
-        display(self.model_dropdown)
-        display(self.play_button)
-        display(self.video_output)
-        display(self.log_output)
+        # Add all elements to container
+        self.ui_container.children = [
+            header,
+            self.model_dropdown,
+            self.play_button,
+            self.video_output,
+            self.log_output
+        ]
+        
+        # Display the container
+        display(self.ui_container)
+        
+        # Force display update in Colab
+        if 'google.colab' in sys.modules:
+            output.eval_js('google.colab.output.setIframeHeight(0, true, {maxHeight: 5000})')
         
     def load_model(self, model_path):
         """Load the trained model."""
@@ -349,7 +377,7 @@ class ModelPlayer:
     def run_mcts(self, state, root):
         """Run Monte Carlo Tree Search from the given state"""
         if not self.mcts_config:
-            print("MCTS config not loaded")
+            self.log("MCTS config not loaded")
             return
 
         # Reset value bounds for new search
@@ -360,32 +388,33 @@ class ModelPlayer:
         with torch.no_grad():
             model_output = self.model(state)
             policy_logits = model_output['policy'][0]
-        
-        # Convert policy to probabilities with training temperature
-        policy = torch.softmax(policy_logits / self.mcts_config['temperature'], dim=-1).cpu().numpy()
-        
-        # Convert value logits to scalar
-        value_logits = model_output['value'][0]
-        value = self.convert_value_logits(value_logits)
-        
-        # Store hidden state
-        root.hidden_state = model_output['hidden_state']
-        
-        # Expand root node
-        for action, prob in enumerate(policy):
-            if prob > 0:
-                root.children[action] = MCTSNode()
-                root.children[action].prior = prob
-        
-        # Add exploration noise to root using config parameters
-        if self.mcts_config['use_dirichlet_noise']:
-            root.add_exploration_noise(
-                dirichlet_alpha=self.mcts_config['dirichlet_alpha'],
-                exploration_fraction=self.mcts_config['dirichlet_fraction']
-            )
-        
+            
+            # Convert policy to probabilities with training temperature
+            policy = torch.softmax(policy_logits / self.mcts_config['temperature'], dim=-1).cpu().numpy()
+            
+            # Convert value logits to scalar
+            value_logits = model_output['value'][0]
+            value = self.convert_value_logits(value_logits)
+            
+            # Store hidden state
+            root.hidden_state = model_output['hidden_state']
+            
+            # Expand root node
+            for action, prob in enumerate(policy):
+                if prob > 0:
+                    root.children[action] = MCTSNode()
+                    root.children[action].prior = prob
+            
+            # Add exploration noise to root using config parameters
+            if self.mcts_config['use_dirichlet_noise']:
+                root.add_exploration_noise(
+                    dirichlet_alpha=self.mcts_config['dirichlet_alpha'],
+                    exploration_fraction=self.mcts_config['dirichlet_fraction']
+                )
+
         # Run simulations sequentially
         num_simulations = self.mcts_config['num_simulations']
+        self.log(f"Starting MCTS with {num_simulations} simulations")
 
         for sim_idx in range(num_simulations):
             # Selection
@@ -449,7 +478,16 @@ class ModelPlayer:
                 new_value = n.get_value()
                 if self.mcts_config['value_rescale']:
                     value = self.get_normalized_value(value)  # Normalize value for next iteration
-        
+
+            # Log progress
+            if (sim_idx + 1) % 10 == 0:  # Log every 10 simulations
+                self.log(f"MCTS Progress: {sim_idx + 1}/{num_simulations} simulations", is_processing=True)
+
+        # Log final action counts
+        action_counts = "\nFinal action visit counts:\n"
+        for action, child in root.children.items():
+            action_counts += f"Action {action}: {child.visit_count} visits\n"
+        self.log(action_counts)
 
     def select_action(self, root, temperature=None):
         """Select action using visit count distribution."""
@@ -462,11 +500,13 @@ class ModelPlayer:
         if self.mcts_config['select_action_by_count']:
             # Select action with maximum visit count
             action = actions[np.argmax(visit_counts)]
+            self.log(f"Selected action {action} with {max(visit_counts)} visits")
         else:
             # Use softmax with temperature
             visit_count_dist = visit_counts ** (1.0 / temperature)
             visit_count_dist = visit_count_dist / np.sum(visit_count_dist)
             action = np.random.choice(actions, p=visit_count_dist)
+            self.log(f"Selected action {action} with {visit_counts[actions.index(action)]} visits")
         
         return action
         
@@ -478,10 +518,7 @@ class ModelPlayer:
             
             # Clear previous output
             self.video_output.clear_output(wait=True)
-            self.log(True)  # Show 'Processing...' at start
-
-            
-            self.log("Processing...")
+            self.log("Initializing game...", is_processing=True)
             
             # Get selected model
             selected_model = self.model_dirs[self.model_dropdown.value]
@@ -489,16 +526,14 @@ class ModelPlayer:
             
             # Load MCTS config first
             if not self.load_config(selected_model):
-                with self.video_output:
-                    print("Failed to load MCTS config")
+                self.log("Failed to load MCTS config")
                 return
             self.log("MCTS config loaded successfully")
             
             # Load model
             loaded_model = self.load_model(selected_model)
             if loaded_model is None:
-                with self.video_output:
-                    print("Failed to load model")
+                self.log("Failed to load model")
                 return
             
             self.model = loaded_model
@@ -515,14 +550,14 @@ class ModelPlayer:
             # Load ROM from local path
             rom_path = os.path.join(os.getcwd(), 'roms', 'ms_pacman.bin')
             if not os.path.exists(rom_path):
-                with self.video_output:
-                    print(f"ROM not found at {rom_path}")
-                    print("Please run install_requirements() first")
+                self.log(f"ROM not found at {rom_path}")
+                self.log("Please run install_requirements() first")
                 return
                 
             self.ale.loadROM(rom_path)
             self.log("ROM loaded successfully")
-            print("--------------------------------")
+            self.log("--------------------------------")
+            self.log("Game in progress...", is_processing=True)
             
             # Initialize frame buffer and action buffer
             frame_buffer = deque(maxlen=ATARI_FEATURE_HISTORY_SIZE)
@@ -580,17 +615,16 @@ class ModelPlayer:
                 
             # Create video
             self.create_video()
-            self.log(False)  # Clear 'Processing...' at end
             
-            with self.video_output:
-                print("--------------------------------")
-                print("Processing complete!    ")  # Show completion only once at the end
-                print(f"Game finished! Total reward: {total_reward}")
-                print(f"Random seed used: {random_seed}")
-                
+            # Log final results
+            self.log("--------------------------------")
+            self.log("Processing complete!")
+            self.log(f"Game finished! Total reward: {total_reward}")
+            self.log(f"Random seed used: {random_seed}")
+            
         except Exception as e:
+            self.log(f"Error playing game: {str(e)}")
             with self.video_output:
-                print(f"Error playing game: {str(e)}")
                 import traceback
                 traceback.print_exc()
                 
