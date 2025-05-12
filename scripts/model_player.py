@@ -212,10 +212,13 @@ class ModelPlayer:
             return False
 
     def log(self, is_processing):
-        with self.log_output:
-            clear_output(wait=True)
-            if is_processing:
-                display(HTML(f"<pre style='color: green; font-weight: bold;'>Processing...</pre>"))
+      with self.log_output:
+          if is_processing:
+              clear_output(wait=True)
+              display(HTML(f"<pre style='color: green; font-weight: bold;'>Processing...</pre>"))
+          else:
+              clear_output(wait=True)  # Just clear the message when done
+
 
 
     def setup_ui(self):
@@ -383,8 +386,7 @@ class ModelPlayer:
         
         # Run simulations sequentially
         num_simulations = self.mcts_config['num_simulations']
-        self.log(True)
-        
+
         for sim_idx in range(num_simulations):
             # Selection
             node = root
