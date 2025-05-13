@@ -51,7 +51,7 @@ reward_values = np.unique(rewards)
 print(f"\nUnique reward values: {reward_values}")
 
 # Save images for a few different reward values
-for reward in reward_values[:10]:  # First 5 unique rewards
+for reward in reward_values[:10]:  # First 10 unique rewards
     idx = np.where(rewards == reward)[0][0]  # Get first occurrence of this reward
     img = images[idx]
     plt.figure(figsize=(8, 8))
@@ -62,12 +62,39 @@ for reward in reward_values[:10]:  # First 5 unique rewards
     plt.close()
     print(f"Saved image for reward {reward}")
 
-reward_distribution = np.histogram(rewards, bins=100, range=(0, 100))
-plt.figure(figsize=(10, 6))
-plt.bar(reward_distribution[1][:-1], reward_distribution[0], width=0.5)
+# Plot reward distribution with better binning
+plt.figure(figsize=(12, 6))
+
+# Create subplot for histogram
+plt.subplot(1, 2, 1)
+# Use unique reward values as bin edges to ensure each reward value gets its own bin
+bin_edges = np.concatenate([reward_values - 0.5, [reward_values[-1] + 0.5]])
+hist, bins, _ = plt.hist(rewards, bins=bin_edges, edgecolor='black')
 plt.xlabel('Reward')
 plt.ylabel('Frequency')
-plt.title('Reward Distribution')
+plt.title('Reward Distribution (Exact Values)')
+plt.xticks(reward_values)  # Show all unique reward values on x-axis
+
+# Create subplot for bar plot
+plt.subplot(1, 2, 2)
+plt.bar(reward_values, [np.sum(rewards == r) for r in reward_values], edgecolor='black')
+plt.xlabel('Reward')
+plt.ylabel('Frequency')
+plt.title('Reward Distribution (Bar Plot)')
+plt.xticks(reward_values)  # Show all unique reward values on x-axis
+
+plt.tight_layout()
 plt.savefig('reward_distribution.png', dpi=300, bbox_inches='tight')
 plt.close()
-print("Reward distribution saved as 'reward_distribution.png'")
+
+# Print detailed reward statistics
+print("\nDetailed reward statistics:")
+print(f"Total number of samples: {len(rewards)}")
+print(f"Number of unique rewards: {len(reward_values)}")
+print("\nReward value counts:")
+for reward in reward_values:
+    count = np.sum(rewards == reward)
+    percentage = (count / len(rewards)) * 100
+    print(f"Reward {reward}: {count} samples ({percentage:.1f}%)")
+
+print("\nReward distribution saved as 'reward_distribution.png'")

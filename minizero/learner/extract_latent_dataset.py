@@ -66,16 +66,13 @@ class AtariEnv:
 
     def play_through_game(self, record):
         """Play through the game using the actions from the training record"""
-        eprint(f"Playing through game record {self.seed}")
         self.reset(self.seed)
         current_pos = 0
         
         # Extract actions from the record
         actions = record.split("B[")[1:]
-        eprint(f"Total actions in record: {len(actions)}")
         
         if not actions:
-            eprint(f"Warning: No actions found in record for game {self.seed}")
             return len(self.frames)
         
         # Play through the game using the actual actions
@@ -88,47 +85,41 @@ class AtariEnv:
                 atari_action = self.env.get_action_meanings().index(ACTION_MEANING[action_id])
                 self.act(atari_action)
                 current_pos += 1
-                if current_pos % 100 == 0:
-                    eprint(f"Game record {self.seed}: Processed {current_pos} frames")
-                    eprint(f"Current rewards: {self.rewards[-10:]}")  # Print last 10 rewards
             except (ValueError, IndexError) as e:
-                eprint(f"Warning: Invalid action format in record: {action}")
                 continue
         
-        eprint(f"Finished game record {self.seed}:")
-        eprint(f"- Total frames: {len(self.frames)}")
-        eprint(f"- Final total reward: {self.total_reward}")
-        eprint(f"- Unique rewards: {np.unique(self.rewards)}")
-        eprint(f"- Reward distribution: {np.bincount(np.array(self.rewards).astype(int))}")
         return len(self.frames)
 
-def get_diverse_frames(frames, rewards, num_samples=5):
-    """Select diverse frames based on position and reward"""
+def get_diverse_frames(frames, rewards, num_samples=5, reward_counts=None):
+    """Select diverse frames based on position and reward, ensuring reward diversity"""
     if len(frames) <= num_samples:
         return list(range(len(frames)))
     
     # Convert rewards to numpy array for easier manipulation
     rewards = np.array(rewards)
-    
-    # Print reward statistics
-    eprint(f"Reward statistics:")
-    eprint(f"- Unique rewards: {np.unique(rewards)}")
-    eprint(f"- Reward distribution: {np.bincount(rewards.astype(int))}")
-    
-    selected_indices = []
     unique_rewards = np.unique(rewards)
     non_zero_rewards = unique_rewards[unique_rewards > 0]
     
+    # Initialize reward_counts if not provided
+    if reward_counts is None:
+        reward_counts = {r: 0 for r in unique_rewards}
+    
+    selected_indices = []
+    
     # First, try to select one frame from each non-zero reward value
+    # Prioritize rewards that have been sampled less frequently
     if len(non_zero_rewards) > 0:
-        for reward in non_zero_rewards:
+        # Sort non-zero rewards by their current count (ascending)
+        sorted_rewards = sorted(non_zero_rewards, key=lambda r: reward_counts.get(r, 0))
+        
+        for reward in sorted_rewards:
             # Get all frames with this reward
             reward_indices = np.where(rewards == reward)[0]
             if len(reward_indices) > 0:
                 # Select the middle frame for this reward value
                 mid_idx = len(reward_indices) // 2
                 selected_indices.append(reward_indices[mid_idx])
-                eprint(f"Selected frame with reward {reward} at position {reward_indices[mid_idx]}")
+                reward_counts[reward] = reward_counts.get(reward, 0) + 1
     
     # Fill remaining slots with frames that are well-distributed in time
     remaining_slots = num_samples - len(selected_indices)
@@ -142,17 +133,13 @@ def get_diverse_frames(frames, rewards, num_samples=5):
             positions = np.linspace(0, len(remaining_indices)-1, remaining_slots, dtype=int)
             for pos in positions:
                 selected_indices.append(remaining_indices[pos])
-                eprint(f"Selected frame at position {pos} with reward {rewards[remaining_indices[pos]]}")
+                reward = rewards[remaining_indices[pos]]
+                reward_counts[reward] = reward_counts.get(reward, 0) + 1
     
     # Sort the indices to maintain temporal order
     selected_indices = sorted(selected_indices)
     
-    # Print final selection
-    eprint(f"Final selected frames:")
-    for idx in selected_indices:
-        eprint(f"- Frame {idx}: reward {rewards[idx]}")
-    
-    return selected_indices
+    return selected_indices, reward_counts
 
 def get_sgf_iteration(sgf_path):
     # Extract iteration number from SGF path
@@ -175,61 +162,69 @@ def main():
     # Load data files
     data_loader.load_data(training_dir, start_iter, end_iter)
     
-    # Get total number of game records
-    features, action_features, label_policy, label_value, label_reward, loss_scale, sampled_index = data_loader.sample_data(model.device)
-    max_env_id = np.max(sampled_index[::2])
-    total_game_records = max_env_id + 1
-    eprint(f"Total game records: {total_game_records}")
-
-    # Process each game record
-    for env_id in range(total_game_records):
-        eprint(f"\nProcessing game record {env_id}/{total_game_records-1}")
-        
-        # Get the game record from the SGF file
-        sgf_path = data_loader.data_list[0]  # Get the first SGF file
-        sgf_iteration = get_sgf_iteration(sgf_path)
-        
+    # Get total number of game records from SGF files
+    total_records = 0
+    for sgf_path in data_loader.data_list:
         with open(sgf_path, 'r') as fin:
             records = fin.readlines()
-            if env_id >= len(records):
-                eprint(f"Warning: No record found for env_id {env_id}")
-                continue
-            record = records[env_id]
-        
-        # Create environment and play through game
-        env = AtariEnv("ms_pacman", "ALE/MsPacman-v5", seed=env_id)
-        num_frames = env.play_through_game(record)
-        
-        if num_frames <= 1:
-            eprint(f"Warning: Game record {env_id} has no valid frames")
-            continue
-        
-        # Get diverse frame indices
-        frame_indices = get_diverse_frames(env.frames, env.rewards, num_samples=5)
-        eprint(f"Selected frame indices for game {env_id}: {frame_indices}")
-        eprint(f"Corresponding rewards: {[env.rewards[i] for i in frame_indices]}")
-        
-        # Sample a batch to get latent vectors
-        features, action_features, label_policy, label_value, label_reward, loss_scale, sampled_index = data_loader.sample_data(model.device)
-        
-        with torch.no_grad():
-            network_output = model.network(features)
-            
-            # Store selected frames and their latent vectors
-            for frame_idx in frame_indices:
-                unique_id = f"{env_id}:{frame_idx}"
-                latent = network_output["hidden_state"][0].cpu().numpy().flatten()  # Use first batch item
-                reward = env.rewards[frame_idx]  # Use the immediate reward from the environment
+            total_records += len(records)
+    
+    # Track reward distribution across all samples
+    reward_counts = {}
+    
+    # Process each game record
+    record_count = 0
+    for sgf_path in data_loader.data_list:
+        with open(sgf_path, 'r') as fin:
+            records = fin.readlines()
+            for record in records:
+                env_id = record_count
                 
-                latent_vectors.append(latent)
-                images.append(env.frames[frame_idx])
-                rewards.append(reward)
-                ids.append(unique_id)
+                # Create environment and play through game
+                env = AtariEnv("ms_pacman", "ALE/MsPacman-v5", seed=env_id)
+                num_frames = env.play_through_game(record)
                 
-                eprint(f"Stored frame {frame_idx} from game {env_id} (reward: {reward})")
+                if num_frames <= 1:
+                    record_count += 1
+                    continue
+                
+                # Get diverse frame indices, passing current reward distribution
+                frame_indices, reward_counts = get_diverse_frames(env.frames, env.rewards, num_samples=5, reward_counts=reward_counts)
+                
+                # Print sampled rewards for this game
+                sampled_rewards = [env.rewards[i] for i in frame_indices]
+                print(f"Game {env_id}: Sampled rewards {sampled_rewards} (Total samples: {len(latent_vectors) + len(frame_indices)})")
+                
+                # Sample a batch to get latent vectors
+                features, action_features, label_policy, label_value, label_reward, loss_scale, sampled_index = data_loader.sample_data(model.device)
+                
+                with torch.no_grad():
+                    network_output = model.network(features)
+                    
+                    # Store selected frames and their latent vectors
+                    for frame_idx in frame_indices:
+                        unique_id = f"{env_id}:{frame_idx}"
+                        latent = network_output["hidden_state"][0].cpu().numpy().flatten()
+                        reward = env.rewards[frame_idx]
+                        
+                        latent_vectors.append(latent)
+                        images.append(env.frames[frame_idx])
+                        rewards.append(reward)
+                        ids.append(unique_id)
+                
+                record_count += 1
+                
+                # Print current reward distribution every 100 games
+                if record_count % 100 == 0:
+                    print("\nCurrent reward distribution:")
+                    for reward, count in sorted(reward_counts.items()):
+                        percentage = (count / len(rewards)) * 100
+                        print(f"Reward {reward}: {count} samples ({percentage:.1f}%)")
+                    print(f"Total samples collected: {len(rewards)}")
+                    print()
 
     if not latent_vectors:
-        eprint("Error: No valid frames were collected")
+        print("Error: No valid frames were collected")
         sys.exit(1)
 
     # Save as .npz
@@ -239,15 +234,20 @@ def main():
     ids = np.array(ids)
     
     # Print final statistics
-    eprint("\nFinal dataset statistics:")
-    eprint(f"Total samples: {len(latent_vectors)}")
-    eprint(f"Unique rewards: {len(np.unique(rewards))}")
-    eprint(f"Reward distribution: {np.bincount(rewards.astype(int))}")
-    eprint(f"Reward range: [{min(rewards)}, {max(rewards)}]")
-    eprint(f"Image shape: {images.shape}")
+    print("\nFinal dataset statistics:")
+    print(f"Total samples: {len(latent_vectors)}")
+    print(f"Unique rewards: {len(np.unique(rewards))}")
+    print(f"Reward range: [{min(rewards)}, {max(rewards)}]")
+    print(f"Image shape: {images.shape}")
+    
+    # Print final reward distribution
+    print("\nFinal reward distribution:")
+    for reward, count in sorted(reward_counts.items()):
+        percentage = (count / len(rewards)) * 100
+        print(f"Reward {reward}: {count} samples ({percentage:.1f}%)")
     
     np.savez_compressed(output_file, latent=latent_vectors, image=images, reward=rewards, id=ids)
-    eprint(f"\nSaved dataset to {output_file}")
+    print(f"\nSaved dataset to {output_file}")
 
 # Add ACTION_MEANING dictionary at the top of the file
 ACTION_MEANING = {
